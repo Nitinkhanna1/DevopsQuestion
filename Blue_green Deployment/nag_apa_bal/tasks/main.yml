@@ -1,0 +1,106 @@
+- name: Adding comment for the service on side "{{ side }}"
+  nagios:
+   host: '{{ inventory_hostname }}'
+   action: command
+   command: ADD_SVC_COMMENT;{{ inventory_hostname }};{{ nagios_srv }};1;ansible;deployment going on
+  delegate_to: "{{ nagios }}"
+
+
+- name: disabling nagios for side "{{ side }}"
+  nagios:
+   host: '{{ inventory_hostname }}'
+   action: silence
+   service: '{{ nagios_srv }}'
+   minutes: 120
+   comment: 'adding downtime for deployment'
+  delegate_to: "{{ nagios }}"
+
+- name: disabling EVENT MANAGER for side "{{ side }}"
+  nagios:
+   host: '{{ inventory_hostname }}'
+   action: command
+   command: DISABLE_SVC_EVENT_HANDLER;{{ inventory_hostname }};{{ nagios_srv }}
+  delegate_to: "{{ nagios }}"
+
+- name: disabling balancer manager of side "{{ side }}"
+  apache24_mod_proxy:
+   balancer_vhost: "{{ item }}"
+   member_host: "{{ inventory_hostname }}"
+   state: disabled
+  with_items: "{{ groups['webservers'] }}"
+  register: balancer_op
+  delegate_to: localhost
+
+- name: showing the status of "DISABLE FLAG for" side "1". It should be set to TRUE
+  debug:
+   msg: "the disabled flag for Apache: {{ balancer_op | json_query('results[0].member.balancer_url') | regex_findall('.*?http://(.*)?/ba.*') }} on balancer member is set to : {{ balancer_op | json_query('results[*].member.status.disabled') }}"
+  
+- name: stopping tomcat server on side "{{ side }}"
+  systemd: name=tomcat state=stopped
+
+- name: copying the war file to tomcat server on side "{{ side }}"
+  copy:
+   src: "{{ war_src }}"
+   dest: "{{ war_dst }}"
+   owner: tomcat
+   group: tomcat
+   mode: 0755 
+
+- name: starting tomcat on side "{{ side }}"
+  systemd: name=tomcat state=started
+
+- name: wait for tomcat to get up
+  wait_for:
+   port: 8080
+   delay: 5
+   timeout: 300
+
+- name: Capturing deployment status of tomcat on side "{{ side }}"
+  uri:
+   url: "http://{{ inventory_hostname }}:8080/sample"
+  register: url_var
+  ignore_errors: yes
+  delegate_to: localhost
+  retries: 3
+  delay: 5
+  until: url_var|succeeded
+
+- name: Displaying deployment status of tomcat on side "{{ side }}. The status code should be 200"
+  debug:
+   msg: "the status code is : {{ url_var | json_query('status') }}"
+
+- name: enable balancer-manager for side "{{ side }}"
+  apache24_mod_proxy:
+   balancer_vhost: "{{ item }}"
+   member_host: "{{ inventory_hostname }}"
+   state: enabled
+  with_items: "{{ groups['webservers'] }}"
+  register: balancer_op
+  delegate_to: localhost
+
+- name: showing the status of "DISABLE FLAG" for side "{{ side }}". It should be set to FALSE
+  debug:
+   msg: "the disabled flag for Apache: {{ balancer_op | json_query('results[0].member.balancer_url') | regex_findall('.*?http://(.*)?/ba.*') }} on balancer member is set to : {{ balancer_op | json_query('results[*].member.status.disabled') }}"
+
+- name: enabling nagios for side "{{ side }}"
+  nagios:
+   host: '{{ inventory_hostname }}'
+   action: unsilence
+   service: '{{ nagios_srv }}'
+   comment: 'deleting downtime for deployment'
+  delegate_to: "{{ nagios }}"
+
+- name: enabling EVENT MANAGER for side "{{ side }}"
+  nagios:
+   host: '{{ inventory_hostname }}'
+   action: command
+   command: ENABLE_SVC_EVENT_HANDLER;{{ inventory_hostname }};{{ nagios_srv }}
+  delegate_to: "{{ nagios }}"
+
+- name: Deleting comment for service on side "{{ side }}"
+  nagios:
+   host: '{{ inventory_hostname }}'
+   action: command
+   command: DEL_ALL_SVC_COMMENTS;{{ inventory_hostname }};{{ nagios_srv }}
+  delegate_to: "{{ nagios }}"
+

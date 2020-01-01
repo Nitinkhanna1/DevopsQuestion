@@ -1,0 +1,19 @@
+- name: Capturing the status of tomcat of side "{{ side }}"
+  systemd: name=tomcat
+  register: status_var
+
+- name: Showing the status of tomcat of side "{{ side }}". It should be "ACTIVE"
+  debug:
+   msg: "STATUS : {{ status_var | json_query('status.ActiveState') }}"
+
+- name: capturing status of balancer manager of side "{{ side }}"
+  apache24_mod_proxy:
+   balancer_vhost: "{{ item }}"
+   member_host: "{{ inventory_hostname }}"
+  with_items: "{{ groups['webservers'] }}"
+  register: balancer_op
+  delegate_to: localhost
+
+- name: showing the status of "DISABLE FLAG for" side "{{ side }}". It should be set to FALSE
+  debug:
+   msg: "the disabled flag for for Apache: {{ balancer_op | json_query('results[0].member.balancer_url') | regex_findall('.*?http://(.*)?/ba.*') }} on balancer member is set to : {{ balancer_op | json_query('results[*].member.status.disabled') }}"
